@@ -1,8 +1,16 @@
 module.exports = Modbus
-  
-function Modbus(address,port,unitId){
+
+/**
+ * 
+ * @param {*} address 
+ * @param {*} port 
+ * @param {*} unitId 
+ * @param {('tcp'|'rtuOverTcp')} protocal 
+ */
+function Modbus(address,port,unitId,protocal){
     let rtn = {}
     let lastTid = 1
+    rtn.lastTid = lastTid
     rtn.packetBufferLength = 100
     rtn.packets = []
     rtn.unitId = unitId
@@ -11,7 +19,7 @@ function Modbus(address,port,unitId){
 
     if(address.includes('.')){
         rtn.stream = Tcp(address,port)
-        rtn.protocal = 'tcp'
+        rtn.protocal = protocal
     }
     else{
         rtn.stream = Serial(address,port)
@@ -29,6 +37,7 @@ function Modbus(address,port,unitId){
 
         let buff = makeDataPacket(tid,0,rtn.unitId,funcCode,address,null,length)
         if(rtn.protocal=='tcp'){buff=buff.tcp}
+        if(rtn.protocal=='rtuOverTcp'){buff=buff.rtu}
         if(rtn.protocal=='rtu'){buff=buff.rtu}
 
         let packet = {
@@ -47,7 +56,7 @@ function Modbus(address,port,unitId){
 
         
         rtn.stream.send(buff)
-        console.log('tx: '+buff.toString('hex'))
+        console.log('tid', tid, 'tx: '+buff.toString('hex'))
         return new Promise((resolve,reject)=>{
             rtn.packets[tid].promiseResolve = resolve
             rtn.packets[tid].promiseReject = reject
@@ -67,7 +76,9 @@ function Modbus(address,port,unitId){
 
         let buff = makeDataPacket(tid,0,rtn.unitId,funcCode,address,value,length)
         if(rtn.protocal=='tcp'){buff=buff.tcp}
+        if(rtn.protocal=='rtuOverTcp'){buff=buff.rtu}
         if(rtn.protocal=='rtu'){buff=buff.rtu}
+
    
         let packet = {
             onResponce:callback,
@@ -80,6 +91,7 @@ function Modbus(address,port,unitId){
             rx:null
         }
         rtn.packets[tid] = packet
+        rtn.lastTid = tid
       
         
   
@@ -94,20 +106,24 @@ function Modbus(address,port,unitId){
     let getTid=()=>{
         if(lastTid>rtn.packetBufferLength){lastTid=0}
         lastTid++
+        rtn.lastTid++
         if(rtn.protocal=='rtu'){lastTid=0}
         return lastTid
     }
 
-    rtn.stream.onData = (buf)=>{
+    rtn.stream.onData = (buf) =>{
         console.log('rx: '+buf.toString('hex'))
 
         let modbusRes
         if(rtn.protocal=="rtu"){modbusRes = parseResponseRtu(buf)}
+        if(rtn.protocal=='rtuOverTcp'){modbusRes = parseResponseRtu(buf, rtn.lastTid)}
         if(rtn.protocal=="tcp"){modbusRes = parseResponseTcp(buf)}
 
         let value = modbusRes.value
-        let tid = modbusRes.tid
+        tid = modbusRes.tid
         if(rtn.protocal=="rtu"){tid=0}
+
+        console.log('tid', tid)
         
         let err = null 
         if(modbusRes.exceptionCode){err='Exception Code: 02 - Illegal Data Address'}
@@ -127,14 +143,16 @@ function Modbus(address,port,unitId){
     }
     return rtn
 }
-function parseResponseRtu(buf){
+function parseResponseRtu(buf, transId){
     let res = {}
-    res.tid=1
+    res.tid=transId
     res.unitId    = buf.readInt8(0)                     //Unit Id        - Byte 6
     res.funcCode  = buf.readInt8(1)                     //Function Code  - Byte 7
     res.byteCount = Math.abs(buf.readInt8(2))           //Byte Count     - Byte 8
     if(buf.length>3){
-        res.value    = buf.readIntBE(3,buf.length-5)       //Data           - Bytes 9+
+        console.log('rx:', buf)
+        // res.value    = buf.readIntBE(3,buf.length-5)       //Data           - Bytes 9+
+        res.value    = buf.slice(3,buf.length) 
     }
 
 
@@ -149,7 +167,8 @@ function parseResponseTcp(buf){
     res.funcCode  = buf.readInt8(7)                     //Function Code  - Byte 7
     res.byteCount = Math.abs(buf.readInt8(8))           //Byte Count     - Byte 8
     if(buf.length>9){
-        res.value    = buf.readIntBE(9,buf.length-9)       //Data           - Bytes 9+
+        // res.value    = buf.readIntBE(9,buf.length-9)       //Data           - Bytes 9+
+        res.value    = buf.slice(9,buf.length)       //Data           - Bytes 9+
     }
 
   
@@ -206,6 +225,7 @@ function makeDataPacket(transId,protoId,unitId,funcCode,address,data,length){
     bufRtu.writeUInt16LE(crc,bufRtu.length-2)
    
     let bufTcp = buf
+    console.log('makeDataPacket TCP', bufTcp, 'makeDataPacket RTU', bufRtu)
     return {tcp:bufTcp,rtu:bufRtu}
 
 }
@@ -321,5 +341,3 @@ function Tcp(ipAddress,port){
 
     return rtn
 }
-
-
